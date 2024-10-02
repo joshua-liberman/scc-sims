@@ -113,13 +113,57 @@ def make_pairwise_probing_sensor(probe_1=400, probe_2=401, probe_amp=None, dm=No
 
     return func
 
-def make_scc_sensor():
+def make_scc_sensor(pinhole_pos, dm=None, optical_system_scc=None, optical_system_vort=None):
     """Generate an SCC difference image
+     Args:
+        pinhole_pos (array): Pinhole position.
+        dm (_type_, optional): Specify DM.
+        optical_system_scc (_type_,): Specify the SCC optical system.
+        optical_system_vort (_type_,): Specify the vortex optical system.
+
+    Returns:
+        _type_: An SCC sensor
+
     """
     def func(wavefront):
         dm.flatten()
+        
+        wavelength = 750e-9 # m
+        pupil_diameter = 6.5
+        grid = make_focal_grid(q=5, num_airy=25, spatial_resolution = wavelength/pupil_diameter)
+        fft_grid = make_fft_grid(grid)
+        fft_scaled_grid = fft_grid.scaled(wavelength/(2*np.pi)) # Convert back to meters
 
-        difference_images = []
+        difference_image = []
+        psf_scc = optical_system_scc(wavefront).power
+        psf_lyot = optical_system_vort(wavefront).power
+
+        psf_lyot_shifted = psf_lyot * (np.exp(2j * np.pi * grid.x * pinhole_pos[0]/wavelength) 
+                            * np.exp(2j * np.pi * grid.y * pinhole_pos[1]/wavelength))
+
+        psf_scc_shifted = psf_scc * (np.exp(2j * np.pi * grid.x * pinhole_pos[0]/wavelength) 
+                            * np.exp(2j * np.pi * grid.y * pinhole_pos[1]/wavelength))
+        
+        fft = FastFourierTransform(grid)
+
+        otf_scc_shifted = fft.forward(psf_scc_shifted)
+        otf_lyot_shifted = fft.forward(psf_lyot_shifted)
+
+        difference_image = otf_scc_shifted - otf_lyot_shifted
+
+        aperture = make_circular_aperture(pupil_diameter)(fft_scaled_grid)
+        sideband = difference_image * aperture
+        sideband_psf = fft.backward(sideband)
+
+        sideband_psf_phase = np.imag(sideband_psf)
+
+        return sideband_psf
+    return func
+
+
+def extract_measurement_from_scc_image(wavefront_image, dark_hole_mask=None):
+    wf_measurement = wavefront_image[dark_hole_mask] # Measure the wavefront in the DH
+    return wf_measurement
 
 def extract_measurement_from_difference_images(difference_images, dark_hole_mask=None, number_of_probes=2):
     """Create function which will obtain measurements from PWP images
