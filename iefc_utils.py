@@ -2,78 +2,6 @@ import numpy as np
 from astropy.io import fits
 from hcipy import *
 
-def make_magaox_bump_mask(normalized=False, with_spiders=True):
-    '''Make the Magellan bump mask.
-
-    Parameters
-    ----------
-    normalized : boolean
-        If this is True, the outer diameter will be scaled to 1. Otherwise, the
-        diameter of the pupil will be 6.5 meters.
-    with_spiders: boolean
-        If this is False, the spiders will be left out.
-
-    Returns
-    -------
-    Field generator
-        The Magellan aperture.
-    '''
-
-    # TODO: Magnify bump mask vals. and preserve default vals
-
-    magnification_factor = 6.5/9e-3 # Mag factor to scale 9 mm bump mask up to 6.5 m pupil diameter
-    mask_inner = 2.79e-3 * magnification_factor # meter
-    mask_outer = 8.604e-3 * magnification_factor # meter
-
-    bump_mask_diameter = 0.5742e-3 * magnification_factor
-
-    bump_mask_pos = [2.853e-3 * magnification_factor, -0.6705e-3 * magnification_factor] 
-
-    radius = np.hypot(bump_mask_pos[0], bump_mask_pos[1])
-    theta = np.arctan2(bump_mask_pos[1], bump_mask_pos[0]) - np.rad2deg(38.7747) + np.pi/2 # Adjusted bump angle to better center it on spider
-    bump_mask_pos = [radius * np.cos(theta), radius * np.sin(theta)]
-
-
-
-    pupil_diameter = 6.5 # meter
-    spider_width1 = 0.1917e-3 * magnification_factor # meter 
-    spider_width2 = 0.1917e-3  * magnification_factor # meter
-    central_obscuration_ratio = mask_inner / mask_outer 
-    spider_offset = [0, 0.34]  # meter
-
-    if normalized:
-        spider_width1 /= pupil_diameter
-        spider_width2 /= pupil_diameter
-        bump_mask_pos = [x / pupil_diameter for x in bump_mask_pos]
-        bump_mask_diameter = (0.5742e-3 * magnification_factor) / pupil_diameter
-
-
-        spider_offset = [x / pupil_diameter for x in spider_offset]
-        pupil_diameter = 1.0
-
-    spider_offset = np.array(spider_offset)
-
-    mirror_edge1 = (pupil_diameter / (2 * np.sqrt(2)), pupil_diameter / (2 * np.sqrt(2)))
-    mirror_edge2 = (-pupil_diameter / (2 * np.sqrt(2)), pupil_diameter / (2 * np.sqrt(2)))
-    mirror_edge3 = (pupil_diameter / (2 * np.sqrt(2)), -pupil_diameter / (2 * np.sqrt(2)))
-    mirror_edge4 = (-pupil_diameter / (2 * np.sqrt(2)), -pupil_diameter / (2 * np.sqrt(2)))
-
-    obstructed_aperture = make_obstructed_circular_aperture(pupil_diameter, central_obscuration_ratio)
-    bump_mask = make_circular_aperture(bump_mask_diameter, center=bump_mask_pos) # Generate bump cover for Magellan pupil
-    
-    if not with_spiders:
-        return obstructed_aperture
-
-    spider1 = make_spider(spider_offset, mirror_edge1, spider_width1)
-    spider2 = make_spider(spider_offset, mirror_edge2, spider_width1)
-    spider3 = make_spider(-spider_offset, mirror_edge3, spider_width2)
-    spider4 = make_spider(-spider_offset, mirror_edge4, spider_width2)
-
-    def func(grid):
-        return obstructed_aperture(grid) * spider1(grid) * spider2(grid) * spider3(grid) * spider4(grid) * (1 - bump_mask(grid))
-    return func
-
-
 def make_pairwise_probing_sensor(probe_1=400, probe_2=401, probe_amp=None, dm=None, optical_system=None):
     """Generate a sequence of pairwise probe, difference images
 
@@ -113,7 +41,7 @@ def make_pairwise_probing_sensor(probe_1=400, probe_2=401, probe_amp=None, dm=No
 
     return func
 
-def make_scc_sensor(pinhole_pos, dm=None, optical_system_scc=None, optical_system_vort=None):
+def make_scc_sensor(optical_system_scc=None, optical_system_vort=None, optical_system_pinhole=None):
     """Generate an SCC difference image
      Args:
         pinhole_pos (array): Pinhole position.
@@ -126,43 +54,27 @@ def make_scc_sensor(pinhole_pos, dm=None, optical_system_scc=None, optical_syste
 
     """
     def func(wavefront):
-        dm.flatten()
+        # dm.flatten()
         
-        wavelength = 750e-9 # m
-        pupil_diameter = 6.5
-        grid = make_focal_grid(q=5, num_airy=25, spatial_resolution = wavelength/pupil_diameter)
-        fft_grid = make_fft_grid(grid)
-        fft_scaled_grid = fft_grid.scaled(wavelength/(2*np.pi)) # Convert back to meters
-
-        difference_image = []
+        
+        # difference_image = []
         psf_scc = optical_system_scc(wavefront).power
         psf_lyot = optical_system_vort(wavefront).power
+        psf_pinhole = optical_system_pinhole(wavefront).power
 
-        psf_lyot_shifted = psf_lyot * (np.exp(2j * np.pi * grid.x * pinhole_pos[0]/wavelength) 
-                            * np.exp(2j * np.pi * grid.y * pinhole_pos[1]/wavelength))
 
-        psf_scc_shifted = psf_scc * (np.exp(2j * np.pi * grid.x * pinhole_pos[0]/wavelength) 
-                            * np.exp(2j * np.pi * grid.y * pinhole_pos[1]/wavelength))
-        
-        fft = FastFourierTransform(grid)
 
-        otf_scc_shifted = fft.forward(psf_scc_shifted)
-        otf_lyot_shifted = fft.forward(psf_lyot_shifted)
+        # sideband_psf_phase = np.imag(sideband_psf)
 
-        difference_image = otf_scc_shifted - otf_lyot_shifted
-
-        aperture = make_circular_aperture(pupil_diameter)(fft_scaled_grid)
-        sideband = difference_image * aperture
-        sideband_psf = fft.backward(sideband)
-
-        sideband_psf_phase = np.imag(sideband_psf)
-
-        return sideband_psf
+        return psf_scc, psf_lyot, psf_pinhole
     return func
 
+def extract_measurement_from_scc_image(psf_scc, psf_lyot, psf_pinhole, dark_hole_mask=None):
 
-def extract_measurement_from_scc_image(wavefront_image, dark_hole_mask=None):
-    wf_measurement = wavefront_image[dark_hole_mask] # Measure the wavefront in the DH
+    psf_diff = psf_scc - psf_lyot - psf_pinhole
+    
+    wf_measurement = psf_diff[dark_hole_mask]
+   
     return wf_measurement
 
 def extract_measurement_from_difference_images(difference_images, dark_hole_mask=None, number_of_probes=2):
@@ -178,5 +90,5 @@ def extract_measurement_from_difference_images(difference_images, dark_hole_mask
     """
 
     difference_dark_hole_pixels = [difference_images[i][dark_hole_mask] for i in range(number_of_probes)]   # Make list of diff DH images
-    pwp_measurement = np.concatenate(difference_dark_hole_pixels)   # Combine into a list
+    pwp_measurement = np.concatenate(difference_dark_hole_pixels)   # Combine real + imagi parts into a list
     return pwp_measurement
