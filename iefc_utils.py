@@ -1,4 +1,8 @@
 import numpy as np
+import matplotlib.pyplot as plt
+import astropy.units as u
+import scipy
+import copy
 from astropy.io import fits
 from hcipy import *
 
@@ -92,3 +96,71 @@ def extract_measurement_from_difference_images(difference_images, dark_hole_mask
     difference_dark_hole_pixels = [difference_images[i][dark_hole_mask] for i in range(number_of_probes)]   # Make list of diff DH images
     pwp_measurement = np.concatenate(difference_dark_hole_pixels)   # Combine real + imagi parts into a list
     return pwp_measurement
+
+
+def time_varying_aberrations(rms, alpha, beta, u0, f0):
+    """Create function which will generate spatial temporal PSDs
+
+    Args:
+        rms (float): The amplitude of WFE
+        alpha (float): Exponent of temporal PSD power law (sets dist btwn high freq, low frew noise)
+        beta (float): Exponent of spatial PSD power law (sets dist btwn high, low freqs in spatial PSD)
+
+        u0 (float): this is essentially the outer scale of the turbulence in meters
+        f0 (float): this is essentially the outer scale of temporal variations
+
+    Returns:
+        __type__: a spatial-temporal PSD generator
+    """
+    def func(grid):
+        kx = grid.x
+        ky = grid.y
+        u = np.hypot(kx, ky) + 1e-10
+        f = grid.z  # f is similar to r0 (sets rms of temporal WFEs)
+
+        spatial_psd = rms * (u**2 + u0**2)**(-beta)
+        spatial_psd[u < 1e-9] = 0
+        temporal_psd = (f**2 + f0**2)**(-alpha)
+
+        # print(type(spatial_psd))
+        # break
+
+        # temporal cube is used to generate quasi-static speckle evolution
+        spatial_temporal_psd = spatial_psd * temporal_psd
+        # spatial_temporal_psd = np.array([spatial_psd, temporal_psd])
+        return spatial_temporal_psd
+    return func
+
+def psd_2_screen(PSD, aperture, ptv):
+    """Create function which will generate optical phase screens from a PSD
+
+    Args:
+        PSD (generator): A generator that returns a specific PSD given a grid/
+        aperture (Field): An HCIPy field, specifying a telescope aperture.
+        ptv (float): The peak to valley amplitude for the optical phase screen.
+
+    Returns:
+        sa_cube (list): A list of phase screens separated by timestep
+        wfe_cube_field: A field containing the surface aberrations at each timestep
+    """
+    def func(grid2d, grid3d):
+        screen = SpectralNoiseFactoryFFT(PSD, grid3d).make_random()()
+        wfe_cube = []
+
+        for i in range(screen.shaped.shape[0]):
+            screen_tstep = screen.shaped[i, :, :].ravel()
+            screen_tstep *= ptv / np.ptp(screen_tstep[aperture != 0])
+            sa_tstep = Field(screen_tstep * aperture, grid3d)
+
+            wfe_cube.append(sa_tstep)
+
+        wfe_cube_field = Field(wfe_cube, grid2d)
+
+        sa_cube = [SurfaceApodizer(i, refractive_index=-1) for i in wfe_cube_field]
+
+        return sa_cube, wfe_cube_field
+    return func
+
+# TODO: Eventually consider trying to generate infinitely long temporal phase screens
+# this would be more memory efficient
+# 
