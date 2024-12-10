@@ -21,7 +21,7 @@ def make_pairwise_probing_sensor(probe_1=400, probe_2=401, probe_amp=None, dm=No
     """
     
     # Generate a 'perform_pwp' function that can be evaluated for a given WF
-    def func(wavefront):
+    def func(wfList):
         dm.flatten()
 
         difference_images = []
@@ -32,8 +32,10 @@ def make_pairwise_probing_sensor(probe_1=400, probe_2=401, probe_amp=None, dm=No
 
                 dm.actuators[probe_pattern] += amp # Apply +/- probe 1 
                 # Propagate WF through system
-                dm_wf = dm.forward(wavefront) # WF after DM
+                dm_wf = dm.forward(wfList) # WF after DM
                 psf = optical_system(dm_wf).power
+                # imshow_psf(psf)
+                # break
                 probed_psfs.append(psf)
                 dm.actuators[probe_pattern] -= amp
 
@@ -44,6 +46,50 @@ def make_pairwise_probing_sensor(probe_1=400, probe_2=401, probe_amp=None, dm=No
         return difference_images
 
     return func
+
+
+def make_pairwise_probing_sensorSCC(probe_1=400, probe_2=401, probe_amp=None, dm=None, optical_system=None):
+    """Generate a sequence of pairwise probe, difference images
+
+    Args:
+        probe_1 (int, optional): Probe 1. Defaults to 400.
+        probe_2 (int, optional): Probe 2. Defaults to 401.
+        probe_amp (_type_, optional): Probe amplitude.
+        dm (_type_, optional): Specify DM.
+        optical_system (_type_, optional): Specify the optical system.
+
+    Returns:
+        _type_: A PWP sensor
+    """
+    
+    # Generate a 'perform_pwp' function that can be evaluated for a given WF
+    def func(wfList):
+        dm.flatten()
+        idx = 0
+        difference_images = []
+        for probe_pattern in [probe_1, probe_2]:
+            # Apply +/- probe 1
+            probed_psfs = []
+            for amp in [-probe_amp, probe_amp]:
+                wavefront = wfList[idx] # change wfList in between DM pokes
+                dm.actuators[probe_pattern] += amp # Apply +/- probe 1 
+                # Propagate WF through system
+                dm_wf = dm.forward(wavefront) # WF after DM
+                psf = optical_system(dm_wf).power
+                # imshow_psf(psf)
+                # break
+                probed_psfs.append(psf)
+                dm.actuators[probe_pattern] -= amp
+                idx +=1
+
+            # Compute difference image 1
+            diff_image = probed_psfs[1] - probed_psfs[0]
+            difference_images.append(diff_image)
+
+        return difference_images
+
+    return func
+
 
 def make_scc_sensor(optical_system_scc=None, optical_system_vort=None, optical_system_pinhole=None):
     """Generate an SCC difference image
@@ -57,14 +103,14 @@ def make_scc_sensor(optical_system_scc=None, optical_system_vort=None, optical_s
         _type_: An SCC sensor
 
     """
-    def func(wavefront):
+    def func(wfList):
         # dm.flatten()
         
         
         # difference_image = []
-        psf_scc = optical_system_scc(wavefront).power
-        psf_lyot = optical_system_vort(wavefront).power
-        psf_pinhole = optical_system_pinhole(wavefront).power
+        psf_scc = optical_system_scc(wfList).power
+        psf_lyot = optical_system_vort(wfList).power
+        psf_pinhole = optical_system_pinhole(wfList).power
 
 
 
